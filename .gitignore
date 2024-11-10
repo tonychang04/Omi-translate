@@ -1,4 +1,10 @@
-venv/
-__pycache__/
+.env
 *.pyc
-.env 
+__pycache__/
+.python-version
+.venv
+venv/
+.env.local
+.env.*.local
+.vercel
+zappa_settings.json

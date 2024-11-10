@@ -1,71 +1,82 @@
+# app.py
+
 from flask import Flask, request, jsonify
-from googlesearch import search
-import re
-from typing import List, Dict
-from datetime import datetime
+import boto3
+import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
+application = app
 
-class GoogleSearcher:
-    def extract_question(self, transcript: str) -> str:
-        """Extract the question from the transcript"""
-        # Simple pattern matching for questions
-        questions = re.findall(r'[^.!?]*\?', transcript)
-        return questions[-1].strip() if questions else transcript
+# Get CSE ID from environment variable, with fallback
+GOOGLE_CSE_ID = os.environ.get('GOOGLE_CSE_ID')
+if not GOOGLE_CSE_ID:
+    raise ValueError("GOOGLE_CSE_ID environment variable is not set")
 
-    def search_google(self, query: str, num_results: int = 5) -> List[Dict]:
-        """Perform Google search and return results"""
-        try:
-            search_results = []
-            for result in search(query, num_results=num_results):
-                search_results.append({
-                    "url": result,
-                    "timestamp": datetime.now().isoformat()
-                })
-            return search_results
-        except Exception as e:
-            print(f"Search error: {str(e)}")
-            return []
-
-@app.route('/webhook', methods=['POST'])
-def memory_webhook():
-    # Get the user ID from query parameters
-    user_id = request.args.get('uid')
-    if not user_id:
-        return jsonify({"error": "No user ID provided"}), 400
-
+def get_user_api_key(user_id):
+    ssm = boto3.client('ssm')
     try:
-        # Parse the incoming memory data
-        memory_data = request.json
-        
-        # Extract transcript
-        transcript = memory_data.get('transcript', '')
-        
-        # Initialize searcher
-        searcher = GoogleSearcher()
-        
-        # Extract question and perform search
-        question = searcher.extract_question(transcript)
-        search_results = searcher.search_google(question)
-        
-        # Prepare the response
-        response = {
-            "app_id": "google-search-assistant",
-            "content": {
-                "question": question,
-                "search_results": search_results,
-                "timestamp": datetime.now().isoformat()
-            }
-        }
-        
-        return jsonify(response), 200
+        response = ssm.get_parameter(
+            Name=f'/omi/google-search/{user_id}',
+            WithDecryption=True
+        )
+        return json.loads(response['Parameter']['Value'])['google_api_key']
+    except ssm.exceptions.ParameterNotFound:
+        return None
+    except Exception as e:
+        print(f"Error retrieving API key: {str(e)}")
+        return None
 
+@app.route('/setup', methods=['POST'])
+def setup():
+    try:
+        data = request.json
+        user_id = request.args.get('uid')
+        
+        if not user_id:
+            return jsonify({"error": "No user ID provided"}), 400
+            
+        ssm = boto3.client('ssm')
+        ssm.put_parameter(
+            Name=f'/omi/google-search/{user_id}',
+            Value=json.dumps({
+                'google_api_key': data['google_api_key'],
+                'google_cse_id': GOOGLE_CSE_ID
+            }),
+            Type='SecureString',
+            Overwrite=True
+        )
+        
+        return jsonify({
+            "status": "success",
+            "is_setup_completed": True
+        }), 200
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/setup-status', methods=['GET'])
-def setup_status():
-    return jsonify({"is_setup_completed": True})
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        user_id = request.args.get('uid')
+        if not user_id:
+            return jsonify({"error": "No user ID provided"}), 400
+            
+        api_key = get_user_api_key(user_id)
+        if not api_key:
+            return jsonify({"error": "User not set up"}), 404
+            
+        # Your Google Search logic here using credentials
+        
+        return jsonify({"status": "success"}), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
+# For local development only
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
