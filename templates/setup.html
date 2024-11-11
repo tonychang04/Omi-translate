@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Search Setup - Omi</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .description {
+            color: #666;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 1.1em;
+        }
+        .form-group {
+            margin-bottom: 25px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #444;
+            font-weight: 500;
+        }
+        .input-description {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .error {
+            color: #dc3545;
+            margin-top: 10px;
+            display: none;
+        }
+        .success {
+            color: #28a745;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Setup Google Search Integration</h1>
+        <p class="description">
+            Connect your Omi assistant with Google Search capabilities. 
+            This integration allows your assistant to search the web and provide up-to-date information.
+        </p>
+        <form id="setupForm">
+            <div class="form-group">
+                <label for="apiKey">Google API Key</label>
+                <input type="text" id="apiKey" name="apiKey" required 
+                       placeholder="Enter your Google API Key">
+                <p class="input-description">
+                    Enter your Google Custom Search API key. You can get this from the 
+                    <a href="https://developers.google.com/custom-search/v1/overview" target="_blank">Google Developer Page</a>.
+                </p>
+            </div>
+            <button type="submit">Save Configuration</button>
+        </form>
+        <div id="errorMessage" class="error"></div>
+        <div id="successMessage" class="success">Setup completed successfully! You can now close this window.</div>
+    </div>
+
+    <script>
+        document.getElementById('setupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const apiKey = document.getElementById('apiKey').value;
+            const errorDiv = document.getElementById('errorMessage');
+            const successDiv = document.getElementById('successMessage');
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const uid = urlParams.get('uid');
+            
+            console.log('Starting setup with:', { uid, apiKeyLength: apiKey.length });
+            
+            if (!uid) {
+                errorDiv.textContent = 'Error: No user ID provided';
+                errorDiv.style.display = 'block';
+                successDiv.style.display = 'none';
+                return;
+            }
+
+            try {
+                const basePath = window.location.pathname.replace(/\/$/, '');
+                const setupUrl = `${basePath}/setup?uid=${encodeURIComponent(uid)}`;
+                
+                console.log('Sending request to:', setupUrl);
+                
+                const response = await fetch(setupUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        google_api_key: apiKey
+                    })
+                });
+
+                console.log('Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+
+                if (response.ok && data.status === 'success') {
+                    errorDiv.style.display = 'none';
+                    successDiv.style.display = 'block';
+                    document.getElementById('setupForm').reset();
+                } else {
+                    const errorMessage = data.error || data.body?.error || 'Unknown error occurred';
+                    errorDiv.textContent = errorMessage;
+                    errorDiv.style.display = 'block';
+                    successDiv.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+                errorDiv.textContent = `Network error: ${error.message}`;
+                errorDiv.style.display = 'block';
+                successDiv.style.display = 'none';
+            }
+        });
+
+        window.addEventListener('load', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const uid = urlParams.get('uid');
+            if (uid) {
+                console.log('Page loaded with UID:', uid);
+            } else {
+                console.log('No UID provided in URL');
+            }
+        });
+    </script>
+</body>
+</html> 

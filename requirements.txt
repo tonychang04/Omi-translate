@@ -37,7 +37,6 @@ boto3==1.33.13
 botocore==1.33.13
 Bottleneck==1.2.1
 bs4==0.0.2
-burnysc2 @ https://github.com/BurnySc2/python-sc2/archive/develop.zip
 cached-property==1.5.2
 cachetools==4.2.0
 certifi==2024.2.2
@@ -280,7 +279,7 @@ pytest-doctestplus==0.3.0
 pytest-openfiles==0.3.2
 pytest-remotedata==0.3.1
 python-dateutil==2.8.0
-python-dotenv==0.21.1
+python-dotenv==1.0.0
 python-slugify==8.0.4
 pytz==2018.9
 PyWavelets==1.0.2
@@ -398,3 +397,6 @@ zope.interface==5.4.0
 zope.lifecycleevent==4.3
 flask-werkzeug
 google-api-python-client
+flask-cors==4.0.0
+aws-lambda-powertools
+boto3
