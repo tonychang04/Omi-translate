@@ -3,54 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Google Search Setup - Omi</title>
+    <title>Translation Setup - Omi</title>
     <style>
+        :root {
+            --primary-color: #4F46E5;
+            --primary-hover: #4338CA;
+            --background: #F9FAFB;
+            --card-background: #FFFFFF;
+            --text-primary: #111827;
+            --text-secondary: #6B7280;
+            --border-color: #E5E7EB;
+            --success-color: #10B981;
+            --error-color: #EF4444;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             line-height: 1.6;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
+            margin: 0;
+            padding: 0;
+            background: var(--background);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+
         .container {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: var(--card-background);
+            padding: 2.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            width: 100%;
+            max-width: 600px;
+            margin: 2rem;
         }
+
         h1 {
-            color: #2c3e50;
-            margin-bottom: 30px;
+            color: var(--text-primary);
+            margin-bottom: 1rem;
             text-align: center;
+            font-size: 1.875rem;
+            font-weight: 700;
         }
+
         .description {
-            color: #666;
-            margin-bottom: 30px;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
             text-align: center;
-            font-size: 1.1em;
+            font-size: 1.1rem;
+            padding: 0 1rem;
         }
+
         .form-group {
-            margin-bottom: 25px;
+            margin-bottom: 1.5rem;
         }
+
         label {
             display: block;
-            margin-bottom: 8px;
-            color: #444;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
             font-weight: 500;
+            font-size: 0.975rem;
         }
+
         .input-description {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 5px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
         }
-        input[type="text"] {
+
+        input[type="text"], select {
             width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 16px;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            transition: border-color 0.15s ease-in-out;
+            background: white;
         }
+
+        input[type="text"]:focus, select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0;
+        }
+
         button {
             background: #007bff;
             color: white;
@@ -77,19 +116,36 @@
 </head>
 <body>
     <div class="container">
-        <h1>Setup Google Search Integration</h1>
+        <h1>Setup Omi Translator</h1>
         <p class="description">
-            Connect your Omi assistant with Google Search capabilities. 
-            This integration allows your assistant to search the web and provide up-to-date information.
+            Connect your Omi assistant with translation capabilities. 
+            This integration allows your assistant to translate conversations using OpenAI's advanced language models.
         </p>
         <form id="setupForm">
             <div class="form-group">
-                <label for="apiKey">Google API Key</label>
+                <label for="apiKey">OpenAI API Key</label>
                 <input type="text" id="apiKey" name="apiKey" required 
-                       placeholder="Enter your Google API Key">
+                       placeholder="Enter your OpenAI API Key">
                 <p class="input-description">
-                    Enter your Google Custom Search API key. You can get this from the 
-                    <a href="https://developers.google.com/custom-search/v1/overview" target="_blank">Google Developer Page</a>.
+                    Enter your OpenAI API key. You can get this from the 
+                    <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Dashboard</a>.
+                </p>
+            </div>
+            <div class="form-group">
+                <label for="targetLanguage">Target Language</label>
+                <select id="targetLanguage" name="targetLanguage" required>
+                    <option value="">Select a language</option>
+                    <option value="Spanish">Spanish</option>
+                    <option value="French">French</option>
+                    <option value="German">German</option>
+                    <option value="Italian">Italian</option>
+                    <option value="Portuguese">Portuguese</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Chinese">Chinese</option>
+                </select>
+                <p class="input-description">
+                    Select the language you want to translate to.
                 </p>
             </div>
             <button type="submit">Save Configuration</button>
@@ -103,13 +159,12 @@
             e.preventDefault();
             
             const apiKey = document.getElementById('apiKey').value;
+            const targetLanguage = document.getElementById('targetLanguage').value;
             const errorDiv = document.getElementById('errorMessage');
             const successDiv = document.getElementById('successMessage');
             
             const urlParams = new URLSearchParams(window.location.search);
             const uid = urlParams.get('uid');
-            
-            console.log('Starting setup with:', { uid, apiKeyLength: apiKey.length });
             
             if (!uid) {
                 errorDiv.textContent = 'Error: No user ID provided';
@@ -122,8 +177,6 @@
                 const basePath = window.location.pathname.replace(/\/$/, '');
                 const setupUrl = `${basePath}/setup?uid=${encodeURIComponent(uid)}`;
                 
-                console.log('Sending request to:', setupUrl);
-                
                 const response = await fetch(setupUrl, {
                     method: 'POST',
                     headers: {
@@ -131,28 +184,32 @@
                         'Accept': 'application/json'
                     },
                     body: JSON.stringify({
-                        google_api_key: apiKey
+                        openai_api_key: apiKey,
+                        target_language: targetLanguage
                     })
                 });
 
-                console.log('Response status:', response.status);
-                
                 const data = await response.json();
-                console.log('Response data:', data);
+                console.log('Response:', { status: response.status, data });
 
-                if (response.ok && data.status === 'success') {
+                if (response.ok) {
                     errorDiv.style.display = 'none';
                     successDiv.style.display = 'block';
                     document.getElementById('setupForm').reset();
                 } else {
-                    const errorMessage = data.error || data.body?.error || 'Unknown error occurred';
+                    let errorMessage = 'An error occurred';
+                    if (data && data.error) {
+                        errorMessage = data.error;
+                    } else if (data && data.message) {
+                        errorMessage = data.message;
+                    }
                     errorDiv.textContent = errorMessage;
                     errorDiv.style.display = 'block';
                     successDiv.style.display = 'none';
                 }
             } catch (error) {
                 console.error('Fetch error:', error);
-                errorDiv.textContent = `Network error: ${error.message}`;
+                errorDiv.textContent = `Network error: Please check your connection and try again`;
                 errorDiv.style.display = 'block';
                 successDiv.style.display = 'none';
             }

@@ -5,32 +5,40 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.event_handler.api_gateway import Response
+from typing import Tuple
+import requests
+import openai
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 # Initialize logger and API resolver
 logger = Logger()
 app = APIGatewayRestResolver()
 
-# Get environment variables
-GOOGLE_CSE_ID = os.environ.get('GOOGLE_CSE_ID')
-AWS_DEFAULT_REGION = 'us-east-1'
 
-if not GOOGLE_CSE_ID:
-    logger.error("GOOGLE_CSE_ID environment variable is not set")
-    raise ValueError("GOOGLE_CSE_ID environment variable is not set")
+# Add OpenAI API key to environment variables
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    logger.error("OPENAI_API_KEY environment variable is not set")
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-def get_user_api_key(user_id: str) -> str:
+openai.api_key = OPENAI_API_KEY
+AWS_DEFAULT_REGION = "us-east-1" 
+
+def get_user_settings(user_id: str) -> tuple:
     ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
     try:
         response = ssm.get_parameter(
-            Name=f'/omi/google-search/{user_id}',
+            Name=f'/omi/realtimetranslate/{user_id}',
             WithDecryption=True
         )
-        return json.loads(response['Parameter']['Value'])['google_api_key']
+        settings = json.loads(response['Parameter']['Value'])
+        return settings.get('openai_api_key'), settings.get('target_language')
     except ssm.exceptions.ParameterNotFound:
-        return None
+        return None, None
     except Exception as e:
-        logger.error(f"Error retrieving API key: {str(e)}")
-        return None
+        logger.error(f"Error retrieving settings: {str(e)}")
+        return None, None
 
 @app.post("/setup")
 def setup():
@@ -41,18 +49,50 @@ def setup():
         
         if not user_id:
             logger.error("No user ID provided")
-            return {"statusCode": 400, "body": {"error": "No user ID provided"}}
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": "No user ID provided"})
+            )
             
-        if not body or 'google_api_key' not in body:
-            logger.error("Invalid request data: missing google_api_key")
-            return {"statusCode": 400, "body": {"error": "Invalid request data"}}
+        if not body or 'openai_api_key' not in body or 'target_language' not in body:
+            logger.error("Invalid request data: missing openai_api_key or target_language")
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": "Invalid request data: Please provide both API key and target language"})
+            )
 
-        ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
+        # Validate the OpenAI API key
+        try:
+            test_client = openai.OpenAI(api_key=body['openai_api_key'])
+            # Make a small test request
+            test_client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5
+            )
+            is_valid = True
+            error_message = None
+        except Exception as e:
+            is_valid = False
+            error_message = f"Invalid OpenAI API key: {str(e)}"
+            logger.error(error_message)
         
+        if not is_valid:
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": error_message})
+            )
+
+        # Store both API key and target language
+        ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
         param_value = json.dumps({
-            'google_api_key': body['google_api_key']
+            'openai_api_key': body['openai_api_key'],
+            'target_language': body['target_language']
         })
-        param_name = f'/omi/google-search/{user_id}'
+        param_name = f'/omi/realtimetranslate/{user_id}'
                 
         ssm.put_parameter(
             Name=param_name,
@@ -63,34 +103,167 @@ def setup():
         
         logger.info(f"Parameter saved successfully for user {user_id}")
         
-        return {
-            "status": "success",
-            "message": "Setup completed successfully",
-            "is_setup_completed": True
-        }
+        return Response(
+            status_code=200,
+            content_type="application/json",
+            body=json.dumps({
+                "status": "success",
+                "message": "Setup completed successfully",
+                "is_setup_completed": True,
+                "target_language": body['target_language']
+            })
+        )
         
     except Exception as e:
         logger.error(f"Error in setup: {str(e)}")
         logger.exception(e)
-        return {"statusCode": 500, "body": {"error": str(e)}}
-
-@app.post("/webhook")
-def webhook():
+        return Response(
+            status_code=500,
+            content_type="application/json",
+            body=json.dumps({
+                "error": f"Server error: {str(e)}"
+            })
+        )
+    
+@app.get("/setup_completed")
+def setup_completed():
     try:
         user_id = app.current_event.get_query_string_value(name="uid")
         if not user_id:
-            return {"statusCode": 400, "body": {"error": "No user ID provided"}}
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": "No user ID provided"})
+            )
+
+        ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
+        
+        try:
+            # Try to get the parameter
+            response = ssm.get_parameter(
+                Name=f'/omi/realtimetranslate/{user_id}',
+                WithDecryption=True
+            )
             
-        api_key = get_user_api_key(user_id)
-        if not api_key:
-            return {"statusCode": 404, "body": {"error": "User not set up"}}
+            # If we get here, the parameter exists
+            return Response(
+                status_code=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "is_setup_completed": True,
+                })
+            )
+        except ssm.exceptions.ParameterNotFound:
+            return Response(
+                status_code=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "is_setup_completed": False,
+                })
+            )
             
-        # Your Google Search logic here
-        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error checking setup status: {str(e)}")
+        return Response(
+            status_code=500,
+            content_type="application/json",
+            body=json.dumps({
+                "error": f"Error checking setup status: {str(e)}"
+            })
+        )
+
+
+@app.post("/translate")
+def translate():
+    try:
+        # Get user ID and validate
+        user_id = app.current_event.get_query_string_value(name="uid")
+        if not user_id:
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": "No user ID provided"})
+            )
+            
+        # Get API key and target language from SSM
+        api_key, stored_language = get_user_settings(user_id)
+        if not api_key or not stored_language:
+            return Response(
+                status_code=404,
+                content_type="application/json",
+                body=json.dumps({"error": "User not set up"})
+            )
+
+        # Get request body
+        body = app.current_event.json_body
+        
+        # Validate input
+        if not body or 'transcript' not in body:
+            return Response(
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"error": "Missing transcript in request"})
+            )
+
+        # Use stored language by default
+        transcript = body['transcript']
+        target_language = stored_language
+        
+        # Initialize OpenAI client with user's API key
+        client = openai.OpenAI(api_key=api_key)
+        
+        try:
+            # Prepare the translation prompt
+            system_prompt = f"You are a professional translator. Translate the following text to {target_language}. Maintain the original meaning, tone, and formatting."
+            
+            # Make the translation request
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": transcript}
+                ],
+                temperature=0.3
+            )
+            
+            translated_text = response.choices[0].message.content
+            
+            return Response(
+                status_code=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "status": "success",
+                    "original_text": transcript,
+                    "translated_text": translated_text,
+                    "target_language": target_language,
+                    "metadata": {
+                        "conversation_id": body.get('id'),
+                        "created_at": body.get('created_at'),
+                        "category": body.get('structured', {}).get('category')
+                    }
+                })
+            )
+            
+        except Exception as e:
+            logger.error(f"Translation failed: {str(e)}")
+            return Response(
+                status_code=500,
+                content_type="application/json",
+                body=json.dumps({
+                    "error": f"Translation failed: {str(e)}"
+                })
+            )
         
     except Exception as e:
-        logger.error(f"Error in webhook: {str(e)}")
-        return {"statusCode": 500, "body": {"error": str(e)}}
+        logger.error(f"Error in translation endpoint: {str(e)}")
+        logger.exception(e)
+        return Response(
+            status_code=500,
+            content_type="application/json",
+            body=json.dumps({
+                "error": f"Request failed: {str(e)}"
+            })
+        )
 
 @logger.inject_lambda_context
 def lambda_handler(event: dict, context: LambdaContext) -> dict:
