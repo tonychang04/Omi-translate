@@ -10,6 +10,9 @@ import requests
 import openai
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import threading
+import time
+from collections import defaultdict
 
 # Initialize logger and API resolver
 logger = Logger()
@@ -172,97 +175,58 @@ def setup_completed():
             })
         )
 
-
 @app.post("/translate")
 def translate():
     try:
-        # Get user ID and validate
+        data = app.current_event.json_body
         user_id = app.current_event.get_query_string_value(name="uid")
-        if not user_id:
-            return Response(
-                status_code=400,
-                content_type="application/json",
-                body=json.dumps({"error": "No user ID provided"})
-            )
+        segments = data.get('transcript_segments', [])
+        
+        translated_segments = []
+        # Process each segment
+        for segment in segments:
+            text = segment.get('text', '').strip()
+            if not text:
+                continue
+                
+            logger.info(f"[SEGMENT] Processing text: '{text}'")
             
-        # Get API key and target language from SSM
-        api_key, stored_language = get_user_settings(user_id)
-        if not api_key or not stored_language:
-            return Response(
-                status_code=404,
-                content_type="application/json",
-                body=json.dumps({"error": "User not set up"})
-            )
-
-        # Get request body
-        body = app.current_event.json_body
-        
-        # Validate input
-        if not body or 'transcript' not in body:
-            return Response(
-                status_code=400,
-                content_type="application/json",
-                body=json.dumps({"error": "Missing transcript in request"})
-            )
-
-        # Use stored language by default
-        transcript = body['transcript']
-        target_language = stored_language
-        
-        # Initialize OpenAI client with user's API key
-        client = openai.OpenAI(api_key=api_key)
-        
-        try:
-            # Prepare the translation prompt
-            system_prompt = f"You are a professional translator. Translate the following text to {target_language}. Maintain the original meaning, tone, and formatting."
+            # Get translation settings
+            api_key, target_language = get_user_settings(user_id)
+            if not api_key or not target_language:
+                raise ValueError("Translation settings not found")
             
-            # Make the translation request
+            # Translate current segment
+            client = openai.OpenAI(api_key=api_key)
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": transcript}
+                    {"role": "system", "content": f"Translate to {target_language}"},
+                    {"role": "user", "content": text}
                 ],
                 temperature=0.3
             )
             
-            translated_text = response.choices[0].message.content
-            
-            return Response(
-                status_code=200,
-                content_type="application/json",
-                body=json.dumps({
-                    "status": "success",
-                    "original_text": transcript,
-                    "translated_text": translated_text,
-                    "target_language": target_language,
-                    "metadata": {
-                        "conversation_id": body.get('id'),
-                        "created_at": body.get('created_at'),
-                        "category": body.get('structured', {}).get('category')
-                    }
-                })
-            )
-            
-        except Exception as e:
-            logger.error(f"Translation failed: {str(e)}")
-            return Response(
-                status_code=500,
-                content_type="application/json",
-                body=json.dumps({
-                    "error": f"Translation failed: {str(e)}"
-                })
-            )
+            translated_text = response.choices[0].message.content.strip()
+            speaker = segment.get('speaker', 'UNKNOWN')
+            formatted_message = f"{speaker}: {translated_text}"
+            logger.info(f"[TRANSLATE] Translation result: '{formatted_message}'")
+            translated_segments.append(formatted_message)
         
-    except Exception as e:
-        logger.error(f"Error in translation endpoint: {str(e)}")
-        logger.exception(e)
+        # Return all translated segments
         return Response(
-            status_code=500,
+            status_code=200,
             content_type="application/json",
             body=json.dumps({
-                "error": f"Request failed: {str(e)}"
+                "message": " ".join(translated_segments)
             })
+        )
+            
+    except Exception as e:
+        logger.error(f"Translation error: {str(e)}")
+        return Response(
+            status_code=500,
+            body=json.dumps({"error": str(e)})
         )
 
 @logger.inject_lambda_context
