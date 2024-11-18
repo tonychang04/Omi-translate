@@ -43,6 +43,62 @@ def get_user_settings(user_id: str) -> tuple:
         logger.error(f"Error retrieving settings: {str(e)}")
         return None, None
 
+# Constants for translation timing
+MIN_WORDS = 5  # minimum words before considering translation
+
+TRIGGER_PHRASES = ["translate", "translate to"]
+PARTIAL_FIRST = ["trans", "translate"]
+PARTIAL_SECOND = ["late", "to"]
+
+class TranslationBuffer:
+    def __init__(self):
+        self.buffers = {}
+        self.lock = threading.Lock()
+        self.cleanup_interval = 300  # 5 minutes
+        self.last_cleanup = time.time()
+
+    def get_buffer(self, session_id):
+        current_time = time.time()
+        
+        # Cleanup old sessions periodically
+        if current_time - self.last_cleanup > self.cleanup_interval:
+            self.cleanup_old_sessions()
+        
+        with self.lock:
+            if session_id not in self.buffers:
+                self.buffers[session_id] = {
+                    'messages': [],
+                    'trigger_detected': False,
+                    'trigger_time': 0,
+                    'collected_text': [],
+                    'response_sent': False,
+                    'partial_trigger': False,
+                    'partial_trigger_time': 0,
+                    'last_activity': current_time
+                }
+            else:
+                self.buffers[session_id]['last_activity'] = current_time
+                
+        return self.buffers[session_id]
+
+    def cleanup_old_sessions(self):
+        current_time = time.time()
+        with self.lock:
+            expired_sessions = [
+                session_id for session_id, data in self.buffers.items()
+                if current_time - data['last_activity'] > 300  # Remove sessions older than 1 hour
+            ]
+            for session_id in expired_sessions:
+                del self.buffers[session_id]
+            self.last_cleanup = current_time
+
+# Initialize the translation buffer instance
+translation_buffer = TranslationBuffer()
+
+# Add cooldown tracking
+translation_cooldowns = defaultdict(float)
+TRANSLATION_COOLDOWN = 5  
+
 @app.post("/setup")
 def setup():
     try:
@@ -178,47 +234,107 @@ def setup_completed():
 @app.post("/translate")
 def translate():
     try:
+        # Get the request data
         data = app.current_event.json_body
         user_id = app.current_event.get_query_string_value(name="uid")
-        segments = data.get('transcript_segments', [])
+        session_id = data.get('session_id',user_id)
+        segments = data.get('segments', [])
         
-        translated_segments = []
-        # Process each segment
+        if not user_id or not session_id:
+            raise ValueError("Both uid and session_id are required")
+        
+        current_time = time.time()
+        buffer_data = translation_buffer.get_buffer(session_id)
+        
         for segment in segments:
-            text = segment.get('text', '').strip()
-            if not text:
+            if not segment.get('text'):
                 continue
+            
+            #logger.info(f"Segment: {segment}")
+            text = segment.get('text', '').strip()
+            
+            # Check for complete trigger phrases first
+            if any(trigger in text.lower() for trigger in TRIGGER_PHRASES) and not buffer_data['trigger_detected']:
+                logger.info(f"[TRIGGER] Session {session_id}, Found trigger phrase in: '{text}'")
+                buffer_data['trigger_detected'] = True
+                buffer_data['trigger_time'] = current_time
+                buffer_data['collected_text'] = []
+                buffer_data['response_sent'] = False
+                buffer_data['partial_trigger'] = False
+                translation_cooldowns[session_id] = current_time
                 
-            logger.info(f"[SEGMENT] Processing text: '{text}'")
+                # Get text after trigger and start collecting
+                for trigger in TRIGGER_PHRASES:
+                    if trigger in text.lower():
+                        parts = text.lower().split(trigger, 1)
+                        if len(parts) > 1:
+                            after_trigger = parts[1].strip()
+                            if after_trigger:
+                                buffer_data['collected_text'].append(after_trigger)
+                                logger.info(f"[COLLECT] Initial text after trigger: '{after_trigger}'")
+                continue
             
-            # Get translation settings
-            api_key, target_language = get_user_settings(user_id)
-            if not api_key or not target_language:
-                raise ValueError("Translation settings not found")
-            
-            # Translate current segment
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": f"Translate to {target_language}"},
-                    {"role": "user", "content": text}
-                ],
-                temperature=0.3
-            )
-            
-            translated_text = response.choices[0].message.content.strip()
-            speaker = segment.get('speaker', 'UNKNOWN')
-            formatted_message = f"{speaker}: {translated_text}"
-            logger.info(f"[TRANSLATE] Translation result: '{formatted_message}'")
-            translated_segments.append(formatted_message)
+            # If trigger was detected, collect text until pause
+            if buffer_data['trigger_detected'] and not buffer_data['response_sent']:
+                time_since_trigger = current_time - buffer_data['trigger_time']
+                logger.info(f"[COLLECT] Time since trigger: {time_since_trigger:.2f}s")
+                # Add current text to collection
+                buffer_data['collected_text'].append(text)
+                
+                # Get complete collected text first
+                collected_text = " ".join(buffer_data['collected_text'])
+                logger.info(f"[COLLECT] Current text: '{collected_text}'")
+                
+                # Then check if we should translate
+                should_translate = (
+                    (any(collected_text.rstrip().endswith(end) for end in ['.', '!', '?']) and
+                    len(collected_text.split()) >= MIN_WORDS) or
+                    time_since_trigger > 8
+                )
+                
+                if should_translate:
+                    # Get translation settings using user_id
+                    api_key, target_language = get_user_settings(user_id)
+                    if not api_key or not target_language:
+                        raise ValueError("Translation settings not found")
+                    
+                    # Translate collected text
+                    client = openai.OpenAI(api_key=api_key)
+                    logger.info(f"[TRANSLATE] Translating text: '{collected_text}'")
+                    
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": f"Translate to {target_language}"},
+                            {"role": "user", "content": collected_text}
+                        ],
+                        temperature=0.3
+                    )
+                    
+                    translated_text = response.choices[0].message.content.strip()
+                    speaker = segment.get('speaker', 'UNKNOWN')
+                    formatted_message = f"{speaker}: {translated_text}"
+                    logger.info(f"[TRANSLATE] Translation result: '{formatted_message}'")
+                    
+                    # Reset buffer
+                    buffer_data['trigger_detected'] = False
+                    buffer_data['collected_text'] = []
+                    buffer_data['response_sent'] = True
+                    
+                    return Response(
+                        status_code=200,
+                        content_type="application/json",
+                        body=json.dumps({
+                            "message": formatted_message
+                        })
+                    )
         
-        # Return all translated segments
+        # Return success if no translation needed
         return Response(
             status_code=200,
             content_type="application/json",
             body=json.dumps({
-                "message": " ".join(translated_segments)
+                "status": "success"
             })
         )
             
@@ -287,3 +403,5 @@ def setup_page():
         content_type="text/html",
         body=html_content
     )
+    
+    
