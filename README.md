@@ -9,7 +9,7 @@ Translation powered by GPT. Whenever a memory is created, it'll be instantly tra
 
 ## Authentication
 1. Get your OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-2. Input the key in the setup page
+2. Input the key in the setup page (not needed now since using my personal API key)
 3. Choose your target language from the dropdown
 
 ## Troubleshooting
