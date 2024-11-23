@@ -119,9 +119,11 @@
         <h1>Setup Omi Translator</h1>
         <p class="description">
             Connect your Omi assistant with translation capabilities. 
-            This integration allows your assistant to translate conversations using OpenAI's advanced language models.
+            This integration allows your assistant to translate conversations using OpenAI's advanced language models. 
+            Currently using my personal API key to ensure best quality.
         </p>
         <form id="setupForm">
+            <!-- Api key not needed now
             <div class="form-group">
                 <label for="apiKey">OpenAI API Key</label>
                 <input type="text" id="apiKey" name="apiKey" required 
@@ -131,6 +133,7 @@
                     <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Dashboard</a>.
                 </p>
             </div>
+            -->
             <div class="form-group">
                 <label for="targetLanguage">Target Language</label>
                 <select id="targetLanguage" name="targetLanguage" required>
@@ -158,7 +161,7 @@
         document.getElementById('setupForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const apiKey = document.getElementById('apiKey').value;
+           // const apiKey = document.getElementById('apiKey').value;
             const targetLanguage = document.getElementById('targetLanguage').value;
             const errorDiv = document.getElementById('errorMessage');
             const successDiv = document.getElementById('successMessage');
@@ -184,7 +187,7 @@
                         'Accept': 'application/json'
                     },
                     body: JSON.stringify({
-                        openai_api_key: apiKey,
+                        //openai_api_key: apiKey,
                         target_language: targetLanguage
                     })
                 });

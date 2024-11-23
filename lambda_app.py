@@ -28,7 +28,13 @@ if not OPENAI_API_KEY:
 openai.api_key = OPENAI_API_KEY
 AWS_DEFAULT_REGION = "us-east-1" 
 
+# Feature flags at the top of the file
+FEATURES = {
+    'USE_GLOBAL_API_KEY': True,  # True = use single API key for all users
+}
+
 def get_user_settings(user_id: str) -> tuple:
+    """Get user's settings based on mode"""
     ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
     try:
         response = ssm.get_parameter(
@@ -36,7 +42,12 @@ def get_user_settings(user_id: str) -> tuple:
             WithDecryption=True
         )
         settings = json.loads(response['Parameter']['Value'])
-        return settings.get('openai_api_key'), settings.get('target_language')
+        
+        if FEATURES['USE_GLOBAL_API_KEY']:
+            return OPENAI_API_KEY, settings.get('target_language')
+        else:
+            return settings.get('openai_api_key'), settings.get('target_language')
+            
     except ssm.exceptions.ParameterNotFound:
         return None, None
     except Exception as e:
@@ -102,7 +113,6 @@ TRANSLATION_COOLDOWN = 5
 @app.post("/setup")
 def setup():
     try:
-        # Get request data
         body = app.current_event.json_body
         user_id = app.current_event.get_query_string_value(name="uid")
         
@@ -113,46 +123,36 @@ def setup():
                 content_type="application/json",
                 body=json.dumps({"error": "No user ID provided"})
             )
-            
-        if not body or 'openai_api_key' not in body or 'target_language' not in body:
-            logger.error("Invalid request data: missing openai_api_key or target_language")
-            return Response(
-                status_code=400,
-                content_type="application/json",
-                body=json.dumps({"error": "Invalid request data: Please provide both API key and target language"})
-            )
-
-        # Validate the OpenAI API key
-        try:
-            test_client = openai.OpenAI(api_key=body['openai_api_key'])
-            # Make a small test request
-            test_client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=5
-            )
-            is_valid = True
-            error_message = None
-        except Exception as e:
-            is_valid = False
-            error_message = f"Invalid OpenAI API key: {str(e)}"
-            logger.error(error_message)
         
-        if not is_valid:
-            return Response(
-                status_code=400,
-                content_type="application/json",
-                body=json.dumps({"error": error_message})
-            )
+        # Validate based on mode
+        if FEATURES['USE_GLOBAL_API_KEY']:
+            # Only require target_language
+            if not body or 'target_language' not in body:
+                return Response(
+                    status_code=400,
+                    content_type="application/json",
+                    body=json.dumps({"error": "Please enter a target language"})
+                )
+            param_value = json.dumps({
+                'target_language': body['target_language']
+            })
+        else:
+            # Require both API key and language
+            if not body or 'target_language' not in body or 'openai_api_key' not in body:
+                return Response(
+                    status_code=400,
+                    content_type="application/json",
+                    body=json.dumps({"error": "Please provide both API key and target language"})
+                )
+            param_value = json.dumps({
+                'target_language': body['target_language'],
+                'openai_api_key': body['openai_api_key']
+            })
 
-        # Store both API key and target language
+        # Store settings
         ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
-        param_value = json.dumps({
-            'openai_api_key': body['openai_api_key'],
-            'target_language': body['target_language']
-        })
         param_name = f'/omi/realtimetranslate/{user_id}'
-                
+        
         ssm.put_parameter(
             Name=param_name,
             Value=param_value,
@@ -198,26 +198,41 @@ def setup_completed():
         ssm = boto3.client('ssm', region_name=AWS_DEFAULT_REGION)
         
         try:
-            # Try to get the parameter
+            # Get the parameter
             response = ssm.get_parameter(
                 Name=f'/omi/realtimetranslate/{user_id}',
                 WithDecryption=True
             )
             
-            # If we get here, the parameter exists
+            # Parse stored settings
+            settings = json.loads(response['Parameter']['Value'])
+            
+            # Check required fields based on mode
+            if FEATURES['USE_GLOBAL_API_KEY']:
+                # Only need target language
+                is_setup_complete = bool(settings.get('target_language'))
+            else:
+                # Need both API key and target language
+                is_setup_complete = bool(
+                    settings.get('target_language') and 
+                    settings.get('openai_api_key')
+                )
+            
             return Response(
                 status_code=200,
                 content_type="application/json",
                 body=json.dumps({
-                    "is_setup_completed": True,
+                    "is_setup_completed": is_setup_complete,
                 })
             )
+            
         except ssm.exceptions.ParameterNotFound:
             return Response(
                 status_code=200,
                 content_type="application/json",
                 body=json.dumps({
                     "is_setup_completed": False,
+                    "reason": "No settings found"
                 })
             )
             
