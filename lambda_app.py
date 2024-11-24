@@ -304,7 +304,7 @@ def translate():
                 should_translate = (
                     (any(collected_text.rstrip().endswith(end) for end in ['.', '!', '?']) and
                     len(collected_text.split()) >= MIN_WORDS) or
-                    time_since_trigger > 8
+                    time_since_trigger > 4
                 )
                 
                 if should_translate:
